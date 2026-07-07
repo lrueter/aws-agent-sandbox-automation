@@ -215,8 +215,33 @@ aws ec2 wait instance-running --instance-ids "$(terraform output -raw instance_i
 terraform destroy
 ```
 
-Stopped, you still pay a little for the EBS volume + idle Elastic IP (~$6/mo).
-`terraform destroy` is the only thing that stops all charges.
+Stopped, you still pay a little for the EBS volume (and the Elastic IP if you
+enabled one). `terraform destroy` is the only thing that stops all charges.
+
+### Idle auto-terminate (cost guard)
+
+So a forgotten box doesn't bill all month, a CloudWatch alarm **terminates the
+instance after sustained low CPU** (on by default). Terminating also deletes the
+root EBS (`delete_on_termination`), so the bulk of the cost stops automatically.
+There's no Elastic IP by default, so the auto-assigned public IP is released on
+terminate too — nothing is left billing.
+
+```hcl
+# terraform.tfvars — tune or disable:
+auto_terminate_idle        = true   # set false to keep the box running untended
+idle_cpu_threshold_percent = 4      # avg CPU below this counts as idle
+idle_minutes               = 45     # sustained-idle time before terminate
+```
+
+Caveats:
+- CPU is a coarse idle signal — a sandbox that's merely sitting idle also counts
+  as idle, so raise `idle_minutes` if you run long, low-CPU workloads.
+- The terminate happens **out of band**, so Terraform state then shows the
+  instance as gone. Rebuild with `terraform apply`, or clean up the remaining
+  stack (security group, key pair) with `terraform destroy`.
+- This terminates the instance; it does not run `terraform destroy`. For a fully
+  hands-off destroy of the *entire* stack you'd move state to a remote backend
+  (S3) and schedule `terraform destroy` in CI — ask if you want that.
 
 ### Inspect / connect
 

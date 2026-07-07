@@ -153,13 +153,23 @@ resource "aws_instance" "forgevm" {
 }
 
 # ---------------------------------------------------------------------------
-# Elastic IP — a stable address that survives the stop/start cycle used by the
-# CLI nested-virt path (and keeps outputs correct in all cases).
+# Elastic IP (optional). Disabled by default so an idle auto-terminate leaves
+# nothing billable behind — the instance's auto-assigned public IP is used
+# instead (and is released automatically on terminate). Turn ON if you want a
+# stable address across stop/start, e.g. with nested_virtualization_method =
+# "cli" (its stop/start would otherwise change the auto-assigned IP).
 # ---------------------------------------------------------------------------
 resource "aws_eip" "forgevm" {
+  count    = var.use_elastic_ip ? 1 : 0
   domain   = "vpc"
   instance = aws_instance.forgevm.id
   tags     = { Name = "forgevm-sandbox" }
+}
+
+locals {
+  # Address to surface in outputs: the Elastic IP if allocated, otherwise the
+  # instance's auto-assigned public IP.
+  host_ip = var.use_elastic_ip ? aws_eip.forgevm[0].public_ip : aws_instance.forgevm.public_ip
 }
 
 # ---------------------------------------------------------------------------
@@ -195,4 +205,37 @@ resource "null_resource" "enable_nested_virt" {
       echo "[nested-virt/cli] Done. /dev/kvm will be present after this boot; the forgevm service will pick it up."
     EOT
   }
+}
+
+# ---------------------------------------------------------------------------
+# Idle cost guard: terminate the instance after sustained low CPU. Terminating
+# also deletes the root EBS (delete_on_termination = true), so the bulk of the
+# cost stops automatically if the box is left running unused. The built-in EC2
+# "terminate" alarm action requires no IAM role.
+#
+# NOTE: this terminates OUT OF BAND, so Terraform state will then show the
+# instance as gone — run `terraform apply` to rebuild, or `terraform destroy`
+# to clean up the rest of the stack. CPU is a coarse idle proxy: a sandbox that
+# is merely sitting idle also counts as idle.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_metric_alarm" "idle_terminate" {
+  count = var.auto_terminate_idle ? 1 : 0
+
+  alarm_name        = "forgevm-sandbox-idle-terminate"
+  alarm_description = "Terminate ForgeVM after ~${var.idle_minutes}m of CPU below ${var.idle_cpu_threshold_percent}%."
+
+  namespace   = "AWS/EC2"
+  metric_name = "CPUUtilization"
+  statistic   = "Average"
+  dimensions  = { InstanceId = aws_instance.forgevm.id }
+
+  comparison_operator = "LessThanThreshold"
+  threshold           = var.idle_cpu_threshold_percent
+  period              = 300 # 5-minute periods (basic monitoring granularity)
+  evaluation_periods  = max(1, ceil(var.idle_minutes / 5))
+  treat_missing_data  = "notBreaching" # don't re-fire once the instance is gone
+
+  alarm_actions = ["arn:aws:automate:${var.region}:ec2:terminate"]
+
+  tags = { Name = "forgevm-sandbox" }
 }

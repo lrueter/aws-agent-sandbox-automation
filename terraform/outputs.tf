@@ -4,8 +4,8 @@ output "instance_id" {
 }
 
 output "public_ip" {
-  description = "Stable public IP (Elastic IP) of the ForgeVM host."
-  value       = aws_eip.forgevm.public_ip
+  description = "Public IP of the ForgeVM host (Elastic IP if use_elastic_ip, else the auto-assigned public IP)."
+  value       = local.host_ip
 }
 
 output "region" {
@@ -26,23 +26,30 @@ output "ami_id" {
 output "ssh_command" {
   description = "SSH into the instance."
   value = var.generate_ssh_key ? (
-    "ssh -i ${var.generated_key_path} ec2-user@${aws_eip.forgevm.public_ip}"
-  ) : "ssh ec2-user@${aws_eip.forgevm.public_ip}"
+    "ssh -i ${var.generated_key_path} ec2-user@${local.host_ip}"
+  ) : "ssh ec2-user@${local.host_ip}"
 }
 
 output "forgevm_url" {
   description = "Base URL of the ForgeVM API."
-  value       = "http://${aws_eip.forgevm.public_ip}:7423"
+  value       = "http://${local.host_ip}:7423"
 }
 
 output "test_command" {
   description = "Quick health check once bootstrap has finished (give it a few minutes)."
-  value       = "curl http://${aws_eip.forgevm.public_ip}:7423/api/v1/sandboxes"
+  value       = "curl http://${local.host_ip}:7423/api/v1/sandboxes"
 }
 
 output "bootstrap_log_hint" {
   description = "Where to watch first-boot progress."
   value = var.generate_ssh_key ? (
-    "ssh -i ${var.generated_key_path} ec2-user@${aws_eip.forgevm.public_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
-  ) : "ssh ec2-user@${aws_eip.forgevm.public_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
+    "ssh -i ${var.generated_key_path} ec2-user@${local.host_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
+  ) : "ssh ec2-user@${local.host_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
+}
+
+output "idle_auto_terminate" {
+  description = "Idle auto-terminate status."
+  value = var.auto_terminate_idle ? (
+    "enabled — terminates after ~${var.idle_minutes}m below ${var.idle_cpu_threshold_percent}% CPU"
+  ) : "disabled"
 }

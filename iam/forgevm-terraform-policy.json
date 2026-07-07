@@ -61,6 +61,22 @@
       "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"
     },
     {
+      "Sid": "ManageIdleTerminateAlarm",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:ListTagsForResource",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": { "aws:RequestedRegion": "us-east-1" }
+      }
+    },
+    {
       "Sid": "WhoAmI",
       "Effect": "Allow",
       "Action": "sts:GetCallerIdentity",

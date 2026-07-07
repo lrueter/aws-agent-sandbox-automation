@@ -28,6 +28,16 @@ instance_type = "m7i-flex.large" # 2 vCPU / 8 GiB, ~$70/mo. Cheaper: "c7i-flex.l
 # ForgeVM version ("" = latest release):
 # forgevm_version = ""
 
+# Idle cost guard: terminate the instance after sustained low CPU so a forgotten
+# box stops billing on its own (kills instance + root EBS). On by default.
+# auto_terminate_idle        = true
+# idle_cpu_threshold_percent = 4     # "idle" = avg CPU below this
+# idle_minutes               = 45    # sustained-idle time before terminate
+
+# Elastic IP: off by default so an auto-terminate leaves nothing billable.
+# Turn on for a stable address (recommended with nested_virtualization_method="cli").
+# use_elastic_ip = false
+
 # Nested virtualization enablement:
 #   "provider" — native aws_instance cpu_options (needs a recent AWS provider)
 #   "cli"      — post-launch `aws ec2 modify-instance-cpu-options` (any provider,

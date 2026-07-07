@@ -69,6 +69,30 @@ variable "key_name" {
   default     = "forgevm-sandbox"
 }
 
+variable "use_elastic_ip" {
+  description = "Allocate an Elastic IP for a stable address. Default false so an idle auto-terminate leaves nothing billable behind (the auto-assigned public IP is used and released on terminate). Set true if you use nested_virtualization_method = \"cli\", whose stop/start would otherwise change the auto-assigned IP."
+  type        = bool
+  default     = false
+}
+
+variable "auto_terminate_idle" {
+  description = "Create a CloudWatch alarm that TERMINATES the instance after sustained low CPU — an idle cost guard. Terminating also deletes the root EBS (delete_on_termination). Set false to let the box persist untended."
+  type        = bool
+  default     = true
+}
+
+variable "idle_cpu_threshold_percent" {
+  description = "Average CPU utilization (percent) below which the instance counts as idle for auto-terminate."
+  type        = number
+  default     = 4
+}
+
+variable "idle_minutes" {
+  description = "Minutes of sustained low CPU before idle auto-terminate fires (rounded up to whole 5-minute periods)."
+  type        = number
+  default     = 45
+}
+
 variable "nested_virtualization_method" {
   description = <<-EOT
     How to enable nested virtualization:
