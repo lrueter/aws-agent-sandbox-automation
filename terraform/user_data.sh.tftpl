@@ -1,0 +1,109 @@
+#!/bin/bash
+# ForgeVM bootstrap (Amazon Linux 2023, x86_64).
+# Rendered by Terraform's templatefile(); ${forgevm_version} and ${xfs_size_gb}
+# are template variables. Everything else is plain bash.
+set -uo pipefail
+exec > >(tee -a /var/log/forgevm-bootstrap.log) 2>&1
+echo "=== ForgeVM bootstrap started at $(date -u) ==="
+
+FORGEVM_DATA_DIR="/var/lib/forgevm"
+XFS_IMG="/opt/forgevm-xfs.img"
+XFS_SIZE_GB="${xfs_size_gb}"
+FORGEVM_VERSION="${forgevm_version}"
+
+# ---------------------------------------------------------------------------
+# 1. Virtualization / KVM sanity check (advisory — never fails the bootstrap)
+# ---------------------------------------------------------------------------
+echo "--- Checking virtualization support ---"
+if grep -Eq 'vmx|svm' /proc/cpuinfo; then
+  echo "OK: CPU virtualization extensions (vmx/svm) present."
+else
+  echo "WARN: no vmx/svm in /proc/cpuinfo — nested virtualization may not be enabled yet."
+fi
+if [ -e /dev/kvm ]; then
+  echo "OK: /dev/kvm present."
+else
+  echo "WARN: /dev/kvm not found. With nested_virtualization_method=cli this is expected on the"
+  echo "      first boot; /dev/kvm appears after the stop/modify/start cycle and the forgevm"
+  echo "      service (enabled below) picks it up on the next boot."
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Base packages
+# ---------------------------------------------------------------------------
+echo "--- Installing packages (docker, xfsprogs, tar, curl) ---"
+dnf -y update
+dnf -y install docker xfsprogs tar curl
+
+# ---------------------------------------------------------------------------
+# 3. Docker
+# ---------------------------------------------------------------------------
+echo "--- Enabling Docker ---"
+systemctl enable --now docker
+usermod -aG docker ec2-user || true
+
+# ---------------------------------------------------------------------------
+# 4. XFS reflink loopback volume at /var/lib/forgevm (fast snapshot restore)
+# ---------------------------------------------------------------------------
+echo "--- Setting up XFS reflink volume ($${XFS_SIZE_GB} GiB) at $FORGEVM_DATA_DIR ---"
+mkdir -p "$FORGEVM_DATA_DIR"
+if ! mountpoint -q "$FORGEVM_DATA_DIR"; then
+  if [ ! -f "$XFS_IMG" ]; then
+    fallocate -l "$${XFS_SIZE_GB}G" "$XFS_IMG"
+    mkfs.xfs -m reflink=1 "$XFS_IMG"
+  fi
+  if ! grep -q "$XFS_IMG" /etc/fstab; then
+    echo "$XFS_IMG $FORGEVM_DATA_DIR xfs loop,defaults 0 0" >> /etc/fstab
+  fi
+  mount "$FORGEVM_DATA_DIR" || mount -o loop "$XFS_IMG" "$FORGEVM_DATA_DIR"
+  echo "OK: XFS reflink volume mounted ($(findmnt -no FSTYPE "$FORGEVM_DATA_DIR"))."
+else
+  echo "Data dir is already a mountpoint; leaving it as-is."
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Install ForgeVM (prebuilt binary — no Go toolchain needed)
+#    Downloads the forgevm binary to /usr/local/bin plus the Firecracker
+#    binary and guest kernel (vmlinux.bin) into /var/lib/forgevm.
+# ---------------------------------------------------------------------------
+echo "--- Installing ForgeVM ---"
+export FORGEVM_INSTALL_DIR="/usr/local/bin"
+if [ -n "$FORGEVM_VERSION" ]; then
+  export FORGEVM_VERSION
+fi
+curl -fsSL https://raw.githubusercontent.com/DohaerisAI/forgevm/main/scripts/install.sh | bash
+
+# ---------------------------------------------------------------------------
+# 6. systemd service
+# ---------------------------------------------------------------------------
+echo "--- Creating forgevm.service ---"
+cat > /etc/systemd/system/forgevm.service <<'UNIT'
+[Unit]
+Description=ForgeVM code-execution sandbox
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Environment=FORGEVM_DATA_DIR=/var/lib/forgevm
+# Bind on all interfaces so the API is reachable remotely (the security group
+# restricts access to your IP). If ForgeVM ignores these vars and only listens
+# on localhost, see the "API not reachable" note in the README.
+Environment=FORGEVM_HOST=0.0.0.0
+Environment=FORGEVM_PORT=7423
+# Prefer the Firecracker microVM provider (requires x86_64 + /dev/kvm).
+Environment=FORGEVM_PROVIDERS_DEFAULT=firecracker
+ExecStart=/usr/local/bin/forgevm serve
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now forgevm.service
+
+echo "=== ForgeVM bootstrap finished at $(date -u) ==="

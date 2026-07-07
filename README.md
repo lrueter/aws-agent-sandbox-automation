@@ -1,1 +1,187 @@
-# aws-agent-sandbox-automation
+# ForgeVM on AWS — automated sandbox deployment
+
+Terraform + a bash bootstrap that provisions a single EC2 host with **nested
+virtualization** enabled and runs [ForgeVM](https://github.com/DohaerisAI/forgevm)
+— a self-hosted, MIT-licensed code-execution sandbox — using its **Firecracker
+microVM provider** for true hardware isolation (~28–35 ms snapshot restore).
+
+The instance family and the `NestedVirtualization=enabled` CPU option are what
+let a non-metal EC2 instance expose `/dev/kvm`, which Firecracker requires.
+
+---
+
+## What gets created
+
+| Resource | Detail |
+|---|---|
+| EC2 instance | `m7i-flex.large` (2 vCPU / 8 GiB), Amazon Linux 2023 x86_64, **nested virtualization enabled** |
+| Root EBS | 40 GiB gp3, encrypted |
+| Elastic IP | stable public address (survives the stop/start used by the CLI path) |
+| Security group | inbound `22` (SSH) + `7423` (ForgeVM API), scoped to a single CIDR |
+| Key pair | created from your local public key |
+| Bootstrap | KVM check → Docker + xfsprogs → XFS reflink volume → ForgeVM install → `forgevm.service` |
+
+**Estimated cost:** ~$72–90/month if left running (instance ~$70, EBS ~$2.40,
+public IPv4 ~$3.60). `terraform destroy` stops all of it. See
+[Managing cost](#managing-cost).
+
+---
+
+## Prerequisites
+
+- **Terraform** ≥ 1.6.
+- **AWS credentials** via environment variables (this setup uses the default
+  credential chain — no named profile):
+  ```bash
+  export AWS_ACCESS_KEY_ID=...
+  export AWS_SECRET_ACCESS_KEY=...
+  # export AWS_SESSION_TOKEN=...   # if using temporary credentials
+  ```
+- **An SSH public key** at `~/.ssh/id_rsa.pub` (or point `public_key_path` at
+  another). No key? `ssh-keygen -t ed25519` and set `public_key_path` to the
+  `.pub` file.
+- **AWS CLI ≥ 2.33.21** — required **only** if you use
+  `nested_virtualization_method = "cli"` (see below). Not needed for the default
+  `"provider"` path.
+
+The IAM identity behind those credentials needs permission to manage EC2
+(instances, security groups, key pairs, EIPs), read the AL2023 SSM public
+parameter, and — for the CLI path — `ec2:StopInstances`, `ec2:StartInstances`,
+and `ec2:ModifyInstanceCpuOptions`.
+
+---
+
+## Nested virtualization — the key constraint
+
+As of Feb 2026 AWS exposes `/dev/kvm` on **non-metal** instances, but only on
+specific families: **c8i, m8i, r8i, c8id, r8id, m8id, c8i-flex, r8i-flex,
+m8i-flex, X8i, C7i, R7i, M7i, C7i-flex, M7i-flex, I7i**. It must be turned on
+explicitly — it is **not** on by default and **not** exposed in the AWS console.
+The `instance_type` variable is validated against this family list.
+
+This project offers two ways to enable it, via `nested_virtualization_method`:
+
+- **`"provider"` (default)** — sets `cpu_options { nested_virtualization =
+  "enabled" }` on `aws_instance` at launch. Cleanest, single `apply`, no stop/
+  start. Needs a recent AWS provider that exposes the argument (run
+  `terraform init -upgrade` to get the latest).
+- **`"cli"` (fallback)** — launches the instance, then a `local-exec` runs
+  `aws ec2 modify-instance-cpu-options --nested-virtualization enabled` on the
+  stopped instance and restarts it. Works with any provider version but requires
+  the AWS CLI locally. On this path `/dev/kvm` is absent during the *first*
+  boot's bootstrap (advisory warning only); it appears after the restart and the
+  `forgevm.service` picks it up automatically on the next boot.
+
+> **Region note:** nested virtualization is documented for all commercial
+> regions, but confirm the chosen family has capacity in your region/AZ before
+> relying on it. Default region here is **us-east-1**.
+
+---
+
+## Quick start
+
+```bash
+cd terraform
+cp terraform.tfvars.example terraform.tfvars   # optional; defaults are sensible
+terraform init          # add -upgrade to pull the latest AWS provider
+terraform apply
+```
+
+Then wait ~3–5 minutes for first-boot bootstrap and check the outputs:
+
+```bash
+terraform output ssh_command          # ssh ec2-user@<ip>
+terraform output forgevm_url          # http://<ip>:7423
+terraform output bootstrap_log_hint   # tail the bootstrap log
+
+# Health check once bootstrap finishes:
+curl "$(terraform output -raw forgevm_url)/api/v1/sandboxes"
+```
+
+To run the on-host verifier:
+
+```bash
+ssh ec2-user@<ip> 'bash -s' < ../scripts/verify-kvm.sh
+```
+
+If `terraform plan` errors with **`Unsupported argument nested_virtualization`**,
+your AWS provider is too old — run `terraform init -upgrade`, or set
+`nested_virtualization_method = "cli"`.
+
+---
+
+## Using ForgeVM
+
+ForgeVM listens on port **7423** and ships Python & TypeScript SDKs. The
+security group only admits your IP, so point SDKs/`curl` at the Elastic IP:
+
+```bash
+BASE="http://<public_ip>:7423"
+curl "$BASE/api/v1/sandboxes"
+```
+
+The systemd unit sets `FORGEVM_PROVIDERS_DEFAULT=firecracker` so sandboxes use
+Firecracker microVMs (given `/dev/kvm` is present).
+
+---
+
+## Managing cost
+
+This is an expensive host — don't leave it running idle.
+
+```bash
+# Tear everything down (stops all charges):
+terraform destroy
+
+# Or just stop the instance to pause compute charges (EBS + EIP still bill a little):
+aws ec2 stop-instances  --instance-ids "$(terraform output -raw instance_id)"
+aws ec2 start-instances --instance-ids "$(terraform output -raw instance_id)"
+```
+
+The Elastic IP keeps the same address across stop/start. `forgevm.service` and
+the XFS mount are persistent, so a stopped/started instance comes back ready.
+
+---
+
+## Troubleshooting
+
+- **`/dev/kvm` missing / no `vmx`/`svm`** — nested virtualization didn't take.
+  Confirm `instance_type` is in the supported family list, and that the CPU
+  option is actually set: `aws ec2 describe-instances --instance-ids <id>
+  --query 'Reservations[].Instances[].CpuOptions'`. On the `"cli"` path, make
+  sure the `local-exec` stop/modify/start completed (re-run `terraform apply`).
+- **`Unsupported argument nested_virtualization`** — old AWS provider; see
+  [Quick start](#quick-start).
+- **API not reachable remotely** (localhost works, your IP doesn't) — the
+  bootstrap sets `FORGEVM_HOST=0.0.0.0`, but if this ForgeVM build ignores that
+  and only binds localhost, adjust the bind address per ForgeVM's docs in
+  `/etc/systemd/system/forgevm.service`, then `sudo systemctl daemon-reload &&
+  sudo systemctl restart forgevm`. Also confirm `allowed_cidr` still matches
+  your current public IP.
+- **Bootstrap details** — `sudo tail -f /var/log/forgevm-bootstrap.log` and
+  `systemctl status forgevm` on the instance.
+
+---
+
+## File layout
+
+```
+terraform/
+  versions.tf              provider + version constraints
+  providers.tf             AWS provider (env-var credentials, default tags)
+  variables.tf             all inputs (region, instance_type, method, ...)
+  main.tf                  AMI/VPC lookups, key, SG, instance, EIP, CLI fallback
+  outputs.tf               IP, SSH command, API URL, health-check hints
+  user_data.sh.tftpl       first-boot bootstrap (KVM/Docker/XFS/ForgeVM/systemd)
+  terraform.tfvars.example copy to terraform.tfvars
+scripts/
+  verify-kvm.sh            on-host health check
+```
+
+## Security notes
+
+- SSH (22) and the ForgeVM API (7423) are restricted to `allowed_cidr` (your
+  IP by default). The API has no auth in front of it here — do not widen the
+  CIDR to `0.0.0.0/0`.
+- Root EBS is encrypted; IMDSv2 is enforced.
+- `terraform.tfvars`, state files, and `*.pem` are gitignored.

@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+
+region        = "us-east-1"
+instance_type = "m7i-flex.large" # 2 vCPU / 8 GiB, ~$70/mo. Cheaper: "c7i-flex.large".
+
+# Access is locked to a single CIDR. Leave empty to auto-detect your current
+# public IP as a /32, or pin it explicitly:
+# allowed_cidr = "203.0.113.7/32"
+
+# SSH key installed for ec2-user (defaults to ~/.ssh/id_rsa.pub):
+# public_key_path = "~/.ssh/id_rsa.pub"
+# key_name        = "forgevm-sandbox"
+
+# Storage:
+# root_volume_size    = 40 # GiB, gp3
+# forgevm_xfs_size_gb = 8  # GiB, XFS reflink loopback for fast snapshots
+
+# ForgeVM version ("" = latest release):
+# forgevm_version = ""
+
+# Nested virtualization enablement:
+#   "provider" — native aws_instance cpu_options (needs a recent AWS provider)
+#   "cli"      — post-launch `aws ec2 modify-instance-cpu-options` (any provider,
+#                requires the AWS CLI >= 2.33.21 locally)
+# nested_virtualization_method = "provider"
