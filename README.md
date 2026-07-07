@@ -161,10 +161,34 @@ Firecracker microVMs (given `/dev/kvm` is present).
 ### Running code with third-party libraries
 
 Sandboxes default to **no network**, so bake dependencies into a custom image
-rather than `pip install` at runtime. See [`examples/`](examples/) for a
-copy-paste workflow: a `Dockerfile` + `requirements.txt`, a host-side `build.sh`
-(`docker build` + `forgevm build-image`), and `run.py` / `run.sh` that spawn a
-sandbox, upload your code, execute it, and clean up.
+rather than `pip install` at runtime. The [`examples/`](examples/) folder is a
+ready-to-use workflow: a `Dockerfile` + `requirements.txt`, a host-side
+`build.sh` (`docker build` + `forgevm build-image`), and `run.py` / `run.sh`
+that spawn a sandbox, upload your code, execute it, and clean up.
+
+End-to-end, from the repo root on your machine (replace `<ip>` with
+`terraform output -raw public_ip`):
+
+```bash
+# 1. Edit examples/requirements.txt to list your libraries.
+
+# 2. Copy examples to the host and build the image + rootfs there. The image
+#    must exist ON THE HOST first — otherwise ForgeVM tries to pull it from
+#    Docker Hub and fails with "pull access denied / repository does not exist".
+scp -i terraform/forgevm-ssh-key.pem -r examples ec2-user@<ip>:~/
+ssh -i terraform/forgevm-ssh-key.pem ec2-user@<ip> 'cd ~/examples && ./build.sh'
+
+# 3. Run your code from your machine (spawn → upload → exec → cleanup):
+cd examples
+FORGEVM_URL=http://<ip>:7423 IMAGE=forgevm-python:latest python3 run.py
+```
+
+`build.sh` takes a couple of minutes the first time (it builds the Python image
+and bakes the ext4 rootfs, then caches it for fast snapshot restores). After
+that, `run.py` spawns from the local image and runs `examples/app/analyze.py`,
+which imports `pandas` to prove the baked-in dependency is available with no
+network. See [`examples/README.md`](examples/README.md) for the runtime-`pip`
+alternative and other details.
 
 ---
 
