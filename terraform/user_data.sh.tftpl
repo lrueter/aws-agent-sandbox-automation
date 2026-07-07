@@ -32,14 +32,24 @@ fi
 # 2. Base packages
 # ---------------------------------------------------------------------------
 echo "--- Installing packages (docker, xfsprogs, tar, curl) ---"
-dnf -y update
-dnf -y install docker xfsprogs tar curl
+# Retry: on first boot dnf/rpm can be briefly locked by cloud-init, and mirror
+# hiccups happen. Don't let a transient failure leave Docker uninstalled.
+for attempt in 1 2 3 4 5; do
+  dnf -y install docker xfsprogs tar curl && break
+  echo "WARN: package install attempt $attempt failed; retrying in 10s..."
+  sleep 10
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: Docker did not install. ForgeVM will still start, but sandbox image"
+  echo "       builds need Docker — install it and run: systemctl restart forgevm"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Docker
 # ---------------------------------------------------------------------------
 echo "--- Enabling Docker ---"
-systemctl enable --now docker
+systemctl enable --now docker || echo "WARN: could not start docker.service yet"
 usermod -aG docker ec2-user || true
 
 # ---------------------------------------------------------------------------
@@ -81,8 +91,9 @@ cat > /etc/systemd/system/forgevm.service <<'UNIT'
 [Unit]
 Description=ForgeVM code-execution sandbox
 After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
+# Soft deps: ForgeVM only needs Docker to build sandbox images on demand, so a
+# missing/late docker.service must not prevent the server from starting.
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
