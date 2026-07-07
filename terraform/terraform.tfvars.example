@@ -7,7 +7,17 @@ instance_type = "m7i-flex.large" # 2 vCPU / 8 GiB, ~$70/mo. Cheaper: "c7i-flex.l
 # public IP as a /32, or pin it explicitly:
 # allowed_cidr = "203.0.113.7/32"
 
-# SSH key installed for ec2-user (defaults to ~/.ssh/id_rsa.pub):
+# Networking: leave empty to use the default VPC. If your account has NO default
+# VPC (common on corporate accounts), set a public subnet id. Find one with:
+#   aws ec2 describe-subnets \
+#     --query 'Subnets[].{ID:SubnetId,VPC:VpcId,AZ:AvailabilityZone,Public:MapPublicIpOnLaunch}' \
+#     --output table
+# subnet_id = "subnet-0abc123..."
+
+# SSH key: either let Terraform generate one...
+# generate_ssh_key   = true
+# generated_key_path = "./forgevm-ssh-key.pem"
+# ...or point at an existing public key (used when generate_ssh_key = false):
 # public_key_path = "~/.ssh/id_rsa.pub"
 # key_name        = "forgevm-sandbox"
 

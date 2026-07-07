@@ -20,12 +20,14 @@ output "allowed_cidr" {
 
 output "ami_id" {
   description = "Amazon Linux 2023 AMI used."
-  value       = data.aws_ssm_parameter.al2023.value
+  value       = nonsensitive(data.aws_ssm_parameter.al2023.value)
 }
 
 output "ssh_command" {
   description = "SSH into the instance."
-  value       = "ssh ec2-user@${aws_eip.forgevm.public_ip}"
+  value = var.generate_ssh_key ? (
+    "ssh -i ${var.generated_key_path} ec2-user@${aws_eip.forgevm.public_ip}"
+  ) : "ssh ec2-user@${aws_eip.forgevm.public_ip}"
 }
 
 output "forgevm_url" {
@@ -40,5 +42,7 @@ output "test_command" {
 
 output "bootstrap_log_hint" {
   description = "Where to watch first-boot progress."
-  value       = "ssh ec2-user@${aws_eip.forgevm.public_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
+  value = var.generate_ssh_key ? (
+    "ssh -i ${var.generated_key_path} ec2-user@${aws_eip.forgevm.public_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
+  ) : "ssh ec2-user@${aws_eip.forgevm.public_ip} 'sudo tail -f /var/log/forgevm-bootstrap.log'"
 }

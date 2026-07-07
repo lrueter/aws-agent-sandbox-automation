@@ -37,9 +37,19 @@ public IPv4 ~$3.60). `terraform destroy` stops all of it. See
   export AWS_SECRET_ACCESS_KEY=...
   # export AWS_SESSION_TOKEN=...   # if using temporary credentials
   ```
-- **An SSH public key** at `~/.ssh/id_rsa.pub` (or point `public_key_path` at
-  another). No key? `ssh-keygen -t ed25519` and set `public_key_path` to the
-  `.pub` file.
+- **An SSH key** — either let Terraform generate one (`generate_ssh_key = true`,
+  written to `generated_key_path`, default `./forgevm-ssh-key.pem`), or supply
+  an existing public key via `public_key_path` (default `~/.ssh/id_rsa.pub`;
+  create one with `ssh-keygen -t ed25519` if you don't have it).
+- **A subnet** — by default the instance goes into your **default VPC**. If your
+  account has no default VPC (common on corporate accounts, and it shows up as
+  `Error: no matching EC2 VPC found`), set `subnet_id` to a **public** subnet.
+  List candidates with:
+  ```bash
+  aws ec2 describe-subnets \
+    --query 'Subnets[].{ID:SubnetId,VPC:VpcId,AZ:AvailabilityZone,Public:MapPublicIpOnLaunch}' \
+    --output table
+  ```
 - **AWS CLI ≥ 2.33.21** — required **only** if you use
   `nested_virtualization_method = "cli"` (see below). Not needed for the default
   `"provider"` path.

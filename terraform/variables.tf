@@ -39,8 +39,26 @@ variable "allowed_cidr" {
   default     = ""
 }
 
+variable "subnet_id" {
+  description = "Subnet to launch into. Leave empty to use the default VPC's first subnet. REQUIRED if your account has no default VPC. Pick a public subnet (one whose route table has an internet gateway) so the Elastic IP is reachable."
+  type        = string
+  default     = ""
+}
+
+variable "generate_ssh_key" {
+  description = "If true, Terraform generates an SSH keypair and writes the private key to generated_key_path (mode 0600) instead of reading public_key_path. Handy when you don't already have a key."
+  type        = bool
+  default     = false
+}
+
+variable "generated_key_path" {
+  description = "Where to write the generated private key when generate_ssh_key = true."
+  type        = string
+  default     = "./forgevm-ssh-key.pem"
+}
+
 variable "public_key_path" {
-  description = "Path to an SSH public key installed for the ec2-user account. Generate one with `ssh-keygen` if you don't have it."
+  description = "Path to an existing SSH public key installed for ec2-user. Used only when generate_ssh_key = false. Generate one with `ssh-keygen -t ed25519` if you don't have it."
   type        = string
   default     = "~/.ssh/id_rsa.pub"
 }
