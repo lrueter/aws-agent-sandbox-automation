@@ -53,6 +53,16 @@ systemctl enable --now docker || echo "WARN: could not start docker.service yet"
 usermod -aG docker ec2-user || true
 
 # ---------------------------------------------------------------------------
+# 3b. ext4 kernel module — ForgeVM builds rootfs images as ext4 and loop-mounts
+# them inside a builder container. AL2023's root fs is XFS, so ext4 isn't loaded
+# by default; without it the build fails with
+# "mount ... failed: Invalid argument". Load it now and on every boot.
+# ---------------------------------------------------------------------------
+echo "--- Loading ext4 kernel module ---"
+modprobe ext4 || echo "WARN: could not load ext4 module"
+echo ext4 > /etc/modules-load.d/forgevm.conf
+
+# ---------------------------------------------------------------------------
 # 4. XFS reflink loopback volume at /var/lib/forgevm (fast snapshot restore)
 # ---------------------------------------------------------------------------
 echo "--- Setting up XFS reflink volume ($${XFS_SIZE_GB} GiB) at $FORGEVM_DATA_DIR ---"
