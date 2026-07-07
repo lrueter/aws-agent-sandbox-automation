@@ -53,6 +53,15 @@ FORGEVM_URL=http://<public_ip>:7423 IMAGE=forgevm-python:latest ./run.sh
 Expected output includes the exec result showing the pandas version and computed
 values — proof the dependency is available inside the microVM with no network.
 
+## Using the official ForgeVM Python SDK
+
+The [`sdk/`](sdk/) subfolder has the upstream ForgeVM SDK examples (`basic.py`,
+`streaming.py`, `ollama_agent.py`), adapted to read the server URL / model /
+image from environment variables. `ollama_agent.py` drives a local Ollama model
+to write code that runs in a sandbox and self-corrects. Note the SDK is a
+client-side library (it runs on your machine, not in the sandbox image). See
+[`sdk/README.md`](sdk/README.md).
+
 ## Alternative: install at runtime (needs network)
 
 For quick iteration you can skip image rebuilds by enabling outbound network on
