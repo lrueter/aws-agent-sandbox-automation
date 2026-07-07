@@ -18,3 +18,7 @@ terraform.rc
 
 # SSH keys
 *.pem
+
+# Python
+__pycache__/
+*.pyc
