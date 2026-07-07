@@ -160,21 +160,75 @@ Firecracker microVMs (given `/dev/kvm` is present).
 
 ---
 
-## Managing cost
+## Day-to-day operations
 
-This is an expensive host — don't leave it running idle.
+Run everything from the `terraform/` directory. Commands that reference the
+instance pull its ID/IP straight from the Terraform outputs, so they keep
+working across rebuilds.
+
+### Lifecycle (mind the ~$70/mo meter — don't leave it running idle)
 
 ```bash
-# Tear everything down (stops all charges):
-terraform destroy
-
-# Or just stop the instance to pause compute charges (EBS + EIP still bill a little):
+# Pause compute charges — keeps the disk, install, and (via the Elastic IP) the
+# same public address. forgevm.service and the XFS mount are persistent, so it
+# comes back ready on start:
 aws ec2 stop-instances  --instance-ids "$(terraform output -raw instance_id)"
+aws ec2 wait instance-stopped --instance-ids "$(terraform output -raw instance_id)"
+
+# Resume later:
 aws ec2 start-instances --instance-ids "$(terraform output -raw instance_id)"
+aws ec2 wait instance-running --instance-ids "$(terraform output -raw instance_id)"
+
+# Tear everything down → billing goes to $0 (rebuild later with `terraform apply`):
+terraform destroy
 ```
 
-The Elastic IP keeps the same address across stop/start. `forgevm.service` and
-the XFS mount are persistent, so a stopped/started instance comes back ready.
+Stopped, you still pay a little for the EBS volume + idle Elastic IP (~$6/mo).
+`terraform destroy` is the only thing that stops all charges.
+
+### Inspect / connect
+
+```bash
+terraform output                      # all outputs (IP, URLs, commands)
+eval "$(terraform output -raw ssh_command)"          # SSH in
+eval "$(terraform output -raw bootstrap_log_hint)"   # tail first-boot log
+```
+
+### Drive ForgeVM
+
+```bash
+BASE="$(terraform output -raw forgevm_url)"          # http://<ip>:7423
+
+curl -sS "$BASE/api/v1/sandboxes"                    # list sandboxes
+
+# Pre-build a rootfs image (first build is slower; then it's cached):
+eval "$(terraform output -raw ssh_command)" 'sudo forgevm build-image alpine:latest'
+
+# Create a sandbox (returns an id like sb-XXXXXXXX):
+curl -sS -X POST "$BASE/api/v1/sandboxes" \
+  -H 'Content-Type: application/json' -d '{"image":"alpine:latest"}'
+```
+
+### On-instance service management
+
+```bash
+sudo systemctl status forgevm          # is it running?
+sudo systemctl restart forgevm         # after config changes
+sudo journalctl -u forgevm -n 50       # recent logs
+```
+
+### Quick reference
+
+| Goal | Command |
+|---|---|
+| Preview infra changes | `terraform plan` |
+| Create / update infra | `terraform apply` |
+| Show outputs | `terraform output` |
+| Pause billing | `aws ec2 stop-instances --instance-ids "$(terraform output -raw instance_id)"` |
+| Resume | `aws ec2 start-instances --instance-ids "$(terraform output -raw instance_id)"` |
+| Destroy (bill → $0) | `terraform destroy` |
+| SSH in | `eval "$(terraform output -raw ssh_command)"` |
+| Health check | `curl "$(terraform output -raw forgevm_url)/api/v1/sandboxes"` |
 
 ---
 
@@ -193,8 +247,22 @@ the XFS mount are persistent, so a stopped/started instance comes back ready.
   `/etc/systemd/system/forgevm.service`, then `sudo systemctl daemon-reload &&
   sudo systemctl restart forgevm`. Also confirm `allowed_cidr` still matches
   your current public IP.
+- **Sandbox create fails: `mount … failed: Invalid argument`** — ForgeVM builds
+  ext4 rootfs images and loop-mounts them, but AL2023 runs on XFS so the `ext4`
+  kernel module isn't loaded by default. **The bootstrap now loads it** (`modprobe
+  ext4` + `/etc/modules-load.d/forgevm.conf`). If you ever see this, run
+  `sudo modprobe ext4` and retry.
+- **`forgevm.service` won't start: `Unit docker.service not found`** — Docker
+  didn't install. **The bootstrap now retries the install** and uses a soft
+  `Wants=docker.service` so the server still starts. To fix by hand:
+  `sudo dnf -y install docker && sudo systemctl enable --now docker && sudo systemctl restart forgevm`.
 - **Bootstrap details** — `sudo tail -f /var/log/forgevm-bootstrap.log` and
   `systemctl status forgevm` on the instance.
+
+> **Note:** all four issues hit during initial bring-up (no default VPC, missing
+> SSH key, Docker install, ext4 module) are handled by the current Terraform and
+> bootstrap — a fresh `terraform destroy && terraform apply` comes up working
+> without manual intervention.
 
 ---
 
