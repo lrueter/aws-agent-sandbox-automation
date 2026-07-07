@@ -10,8 +10,10 @@ locals {
   detected_cidr = var.allowed_cidr != "" ? var.allowed_cidr : "${chomp(data.http.myip[0].response_body)}/32"
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
-    forgevm_version = var.forgevm_version
-    xfs_size_gb     = var.forgevm_xfs_size_gb
+    forgevm_version     = var.forgevm_version
+    xfs_size_gb         = var.forgevm_xfs_size_gb
+    auto_terminate_idle = var.auto_terminate_idle
+    idle_minutes        = var.idle_minutes
   })
 }
 
@@ -127,6 +129,11 @@ resource "aws_instance" "forgevm" {
   user_data                   = local.user_data
   user_data_replace_on_change = true
 
+  # When idle auto-terminate is on, an OS `shutdown -h` (issued by the in-instance
+  # idle timer) TERMINATES the instance instead of stopping it. API stop-instances
+  # is unaffected, so the manual stop/start pause workflow still works.
+  instance_initiated_shutdown_behavior = var.auto_terminate_idle ? "terminate" : "stop"
+
   # Native provider path for nested virtualization (recent AWS provider required).
   # When method = "cli", this block is omitted and null_resource.enable_nested_virt
   # enables it after launch instead.
@@ -208,34 +215,9 @@ resource "null_resource" "enable_nested_virt" {
 }
 
 # ---------------------------------------------------------------------------
-# Idle cost guard: terminate the instance after sustained low CPU. Terminating
-# also deletes the root EBS (delete_on_termination = true), so the bulk of the
-# cost stops automatically if the box is left running unused. The built-in EC2
-# "terminate" alarm action requires no IAM role.
-#
-# NOTE: this terminates OUT OF BAND, so Terraform state will then show the
-# instance as gone — run `terraform apply` to rebuild, or `terraform destroy`
-# to clean up the rest of the stack. CPU is a coarse idle proxy: a sandbox that
-# is merely sitting idle also counts as idle.
+# Idle cost guard is implemented IN THE INSTANCE (see user_data.sh.tftpl): a
+# systemd timer terminates the box after var.idle_minutes of inactivity via an
+# OS shutdown (instance_initiated_shutdown_behavior = "terminate" above). This
+# needs no CloudWatch and no IAM, so it works in accounts where CloudWatch
+# alarm EC2 actions are restricted.
 # ---------------------------------------------------------------------------
-resource "aws_cloudwatch_metric_alarm" "idle_terminate" {
-  count = var.auto_terminate_idle ? 1 : 0
-
-  alarm_name        = "forgevm-sandbox-idle-terminate"
-  alarm_description = "Terminate ForgeVM after ~${var.idle_minutes}m of CPU below ${var.idle_cpu_threshold_percent}%."
-
-  namespace   = "AWS/EC2"
-  metric_name = "CPUUtilization"
-  statistic   = "Average"
-  dimensions  = { InstanceId = aws_instance.forgevm.id }
-
-  comparison_operator = "LessThanThreshold"
-  threshold           = var.idle_cpu_threshold_percent
-  period              = 300 # 5-minute periods (basic monitoring granularity)
-  evaluation_periods  = max(1, ceil(var.idle_minutes / 5))
-  treat_missing_data  = "notBreaching" # don't re-fire once the instance is gone
-
-  alarm_actions = ["arn:aws:automate:${var.region}:ec2:terminate"]
-
-  tags = { Name = "forgevm-sandbox" }
-}

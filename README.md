@@ -220,39 +220,42 @@ enabled one). `terraform destroy` is the only thing that stops all charges.
 
 ### Idle auto-terminate (cost guard)
 
-So a forgotten box doesn't bill all month, a CloudWatch alarm **terminates the
-instance after sustained low CPU** (on by default). Terminating also deletes the
-root EBS (`delete_on_termination`), so the bulk of the cost stops automatically.
-There's no Elastic IP by default, so the auto-assigned public IP is released on
-terminate too — nothing is left billing.
+So a forgotten box doesn't bill all month, the instance **terminates itself after
+a period of inactivity** (on by default). This is done entirely inside the box —
+a systemd timer (`forgevm-idle.timer`) runs every 5 minutes and, once there have
+been no running ForgeVM sandboxes, no logged-in SSH users, and low CPU load for
+`idle_minutes`, runs `shutdown -h`. Because the instance is launched with
+`instance_initiated_shutdown_behavior = "terminate"`, that OS shutdown terminates
+it (and deletes the root EBS). No CloudWatch and no IAM are involved, so it works
+even in accounts where CloudWatch alarm EC2 actions are restricted. With no
+Elastic IP by default, the auto-assigned public IP is released too — nothing left
+billing.
 
 ```hcl
 # terraform.tfvars — tune or disable:
-auto_terminate_idle        = true   # set false to keep the box running untended
-idle_cpu_threshold_percent = 4      # avg CPU below this counts as idle
-idle_minutes               = 45     # sustained-idle time before terminate
+auto_terminate_idle = true   # false = never self-terminate; shutdown just stops it
+idle_minutes        = 45     # sustained-idle time before terminate
+```
+
+Check what's happening on the box:
+
+```bash
+systemctl list-timers forgevm-idle.timer          # next run
+journalctl -t forgevm-idle -n 20                  # idle-check log
 ```
 
 Caveats:
-- CPU is a coarse idle signal — a sandbox that's merely sitting idle also counts
-  as idle, so raise `idle_minutes` if you run long, low-CPU workloads.
-- The terminate happens **out of band**, so Terraform state then shows the
-  instance as gone. Rebuild with `terraform apply`, or clean up the remaining
-  stack (security group, key pair) with `terraform destroy`.
+- Idle is judged by (no sandboxes) + (no SSH sessions) + (1-min load < 0.5). A
+  disconnected background job won't count as busy — raise `idle_minutes` if you
+  detach long, low-load work. There's a ~15-minute grace period after boot.
+- Terminating happens **out of band**, so Terraform state then shows the instance
+  as gone. Rebuild with `terraform apply`, or clean up the remaining stack
+  (security group, key pair) with `terraform destroy`.
+- Manual pause still works: `aws ec2 stop-instances` uses the API (not an OS
+  shutdown), so it *stops* rather than terminates.
 - This terminates the instance; it does not run `terraform destroy`. For a fully
   hands-off destroy of the *entire* stack you'd move state to a remote backend
   (S3) and schedule `terraform destroy` in CI — ask if you want that.
-
-**First-time `AccessDenied` on the alarm:** creating a CloudWatch alarm with an
-EC2 action needs the account's service-linked role `AWSServiceRoleForCloudWatchEvents`.
-The console auto-creates it, but the Terraform/API path doesn't, and a scoped
-deploy user may lack `iam:CreateServiceLinkedRole`. Two fixes: (a) create it once,
-account-wide, as an admin — `aws iam create-service-linked-role --aws-service-name
-events.amazonaws.com` — then re-apply; or (b) grant the deploy user the scoped
-`iam:CreateServiceLinkedRole` permission (already in
-`iam/forgevm-terraform-policy.json`) so the first apply creates it. If IAM is
-locked down and neither is possible, set `auto_terminate_idle = false` and use
-an in-instance idle-shutdown instead (ask).
 
 ### Inspect / connect
 

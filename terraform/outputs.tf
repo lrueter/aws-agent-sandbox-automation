@@ -48,8 +48,8 @@ output "bootstrap_log_hint" {
 }
 
 output "idle_auto_terminate" {
-  description = "Idle auto-terminate status."
+  description = "In-instance idle auto-terminate status."
   value = var.auto_terminate_idle ? (
-    "enabled — terminates after ~${var.idle_minutes}m below ${var.idle_cpu_threshold_percent}% CPU"
+    "enabled — self-terminates after ~${var.idle_minutes}m idle (no sandboxes, no SSH, low load)"
   ) : "disabled"
 }

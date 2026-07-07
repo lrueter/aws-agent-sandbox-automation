@@ -76,19 +76,13 @@ variable "use_elastic_ip" {
 }
 
 variable "auto_terminate_idle" {
-  description = "Create a CloudWatch alarm that TERMINATES the instance after sustained low CPU — an idle cost guard. Terminating also deletes the root EBS (delete_on_termination). Set false to let the box persist untended."
+  description = "Idle cost guard: an in-instance systemd timer TERMINATES the box after idle_minutes of inactivity (no running ForgeVM sandboxes, no SSH sessions, low CPU load) via an OS shutdown. Needs no CloudWatch/IAM. Terminating also deletes the root EBS. Set false to let the box persist untended (and shutdown just stops it)."
   type        = bool
   default     = true
 }
 
-variable "idle_cpu_threshold_percent" {
-  description = "Average CPU utilization (percent) below which the instance counts as idle for auto-terminate."
-  type        = number
-  default     = 4
-}
-
 variable "idle_minutes" {
-  description = "Minutes of sustained low CPU before idle auto-terminate fires (rounded up to whole 5-minute periods)."
+  description = "Minutes of sustained inactivity before the in-instance idle guard terminates the box (checked every 5 minutes, with a ~15m grace period after boot)."
   type        = number
   default     = 45
 }
