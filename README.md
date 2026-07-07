@@ -158,6 +158,14 @@ curl "$BASE/api/v1/sandboxes"
 The systemd unit sets `FORGEVM_PROVIDERS_DEFAULT=firecracker` so sandboxes use
 Firecracker microVMs (given `/dev/kvm` is present).
 
+### Running code with third-party libraries
+
+Sandboxes default to **no network**, so bake dependencies into a custom image
+rather than `pip install` at runtime. See [`examples/`](examples/) for a
+copy-paste workflow: a `Dockerfile` + `requirements.txt`, a host-side `build.sh`
+(`docker build` + `forgevm build-image`), and `run.py` / `run.sh` that spawn a
+sandbox, upload your code, execute it, and clean up.
+
 ---
 
 ## Day-to-day operations
@@ -281,6 +289,9 @@ scripts/
   verify-kvm.sh            on-host health check
 iam/
   forgevm-terraform-policy.json   least-privilege IAM policy for the deploy user
+examples/
+  Dockerfile, requirements.txt, app/, build.sh, run.py, run.sh
+                           running Python-with-dependencies in a sandbox
 ```
 
 ## Security notes
