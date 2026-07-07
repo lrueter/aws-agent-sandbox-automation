@@ -31,11 +31,15 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Base packages
 # ---------------------------------------------------------------------------
-echo "--- Installing packages (docker, xfsprogs, tar, curl) ---"
-# Retry: on first boot dnf/rpm can be briefly locked by cloud-init, and mirror
-# hiccups happen. Don't let a transient failure leave Docker uninstalled.
+echo "--- Installing packages (docker, xfsprogs, tar) ---"
+# Do NOT add "curl" to this list: Amazon Linux 2023 ships curl-minimal, and
+# pulling in the full "curl" package conflicts with it, which fails the ENTIRE
+# dnf transaction (taking docker + xfsprogs down with it). curl-minimal already
+# provides the `curl` command used later in this script. The retry loop only
+# helps with genuine transient lock/mirror hiccups — it cannot fix a package
+# conflict, so the fix is to not request the conflicting package.
 for attempt in 1 2 3 4 5; do
-  dnf -y install docker xfsprogs tar curl && break
+  dnf -y install docker xfsprogs tar && break
   echo "WARN: package install attempt $attempt failed; retrying in 10s..."
   sleep 10
 done

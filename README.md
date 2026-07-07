@@ -260,9 +260,12 @@ sudo journalctl -u forgevm -n 50       # recent logs
   kernel module isn't loaded by default. **The bootstrap now loads it** (`modprobe
   ext4` + `/etc/modules-load.d/forgevm.conf`). If you ever see this, run
   `sudo modprobe ext4` and retry.
-- **`forgevm.service` won't start: `Unit docker.service not found`** — Docker
-  didn't install. **The bootstrap now retries the install** and uses a soft
-  `Wants=docker.service` so the server still starts. To fix by hand:
+- **Docker didn't install / `build-image` says `docker … not found in PATH`** —
+  the classic cause on AL2023 is a `dnf` package conflict: requesting the full
+  `curl` package clashes with the preinstalled `curl-minimal` and fails the
+  whole install transaction. **The bootstrap avoids this** (it no longer
+  requests `curl`) and uses a soft `Wants=docker.service` so ForgeVM starts
+  regardless. To fix an affected box by hand:
   `sudo dnf -y install docker && sudo systemctl enable --now docker && sudo systemctl restart forgevm`.
 - **Bootstrap details** — `sudo tail -f /var/log/forgevm-bootstrap.log` and
   `systemctl status forgevm` on the instance.
