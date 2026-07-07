@@ -56,6 +56,16 @@ def main():
     status, sb = call("POST", "/api/v1/sandboxes", {"image": IMAGE})
     print(f"  [{status}] {json.dumps(sb) if isinstance(sb, dict) else sb}")
     if not isinstance(sb, dict) or "id" not in sb:
+        blob = sb if isinstance(sb, str) else json.dumps(sb)
+        if "pull access denied" in blob or "repository does not exist" in blob:
+            sys.exit(
+                f"\nImage '{IMAGE}' isn't on the ForgeVM host yet, so it tried to\n"
+                f"pull it from Docker Hub and failed. Build it on the host first:\n"
+                f"  scp -i <key.pem> -r . ec2-user@<host>:~/examples\n"
+                f"  ssh -i <key.pem> ec2-user@<host> 'cd ~/examples && ./build.sh'\n"
+                f"...then re-run. (Or set IMAGE= to a public image that already\n"
+                f"contains your dependencies.)"
+            )
         sys.exit("spawn failed (see response above)")
     sid = sb["id"]
 

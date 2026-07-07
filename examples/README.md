@@ -24,13 +24,20 @@ Edit `requirements.txt` (pin versions for reproducibility).
 
 ### 2. Build the image on the ForgeVM host
 
+The image must exist **on the host** before you can spawn from it — otherwise
+ForgeVM tries to `docker pull` it from Docker Hub and fails with
+`pull access denied … repository does not exist`. Copy this folder over and run
+`build.sh` there:
+
 ```bash
-# copy this folder to the host (or git clone the repo there), then:
-ssh -i ../forgevm-ssh-key.pem ec2-user@<public_ip>
-cd examples
-./build.sh                      # builds forgevm-python:latest and its rootfs
-# or: ./build.sh myteam-ml:latest
+# from the repo root on your Mac:
+scp -i terraform/forgevm-ssh-key.pem -r examples ec2-user@<public_ip>:~/
+ssh -i terraform/forgevm-ssh-key.pem ec2-user@<public_ip> 'cd ~/examples && ./build.sh'
+# or a custom tag: ... './build.sh myteam-ml:latest'
 ```
+
+`build.sh` runs `docker build` then `forgevm build-image` (passwordless sudo
+works over SSH).
 
 `build.sh` runs `docker build` then `forgevm build-image`, which caches an ext4
 rootfs so later spawns are fast (snapshot restore).
