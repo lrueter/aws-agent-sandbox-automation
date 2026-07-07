@@ -237,12 +237,39 @@ auto_terminate_idle = true   # false = never self-terminate; shutdown just stops
 idle_minutes        = 45     # sustained-idle time before terminate
 ```
 
-Check what's happening on the box:
+#### Checking whether the instance has terminated
+
+The authoritative check is the EC2 API (not SSH — a failed SSH could just be a
+wrong key path). From the `terraform/` directory:
 
 ```bash
-systemctl list-timers forgevm-idle.timer          # next run
-journalctl -t forgevm-idle -n 20                  # idle-check log
+aws ec2 describe-instances --instance-ids "$(terraform output -raw instance_id)" \
+  --query 'Reservations[].Instances[].State.Name' --output text
+# running | shutting-down | terminated
 ```
+
+- `running` — still up
+- `shutting-down` — the idle guard just fired
+- `terminated` — gone; billing stopped
+
+**Expect ~15 minutes minimum, even with a small `idle_minutes`.** The timer has a
+15-minute boot grace before its *first* check, so a box set to `idle_minutes = 5`
+still won't terminate until ~15 min after launch. Don't read "still running at 5
+min" as a failure.
+
+Watch the on-box idle log while you wait (nothing appears until the first check
+at ~15 min; note the key path is `./forgevm-ssh-key.pem` from `terraform/`):
+
+```bash
+ssh -i ./forgevm-ssh-key.pem ec2-user@"$(terraform output -raw public_ip)" \
+  'systemctl list-timers forgevm-idle.timer --all --no-pager; echo ---; journalctl -t forgevm-idle -n 20 --no-pager'
+```
+
+The log shows `idle check N of N` each period, then `idle ~<n> min - terminating
+instance` just before it goes down. After termination, `terraform plan` shows the
+instance needs recreating (out-of-band change) — rebuild with `terraform apply`
+or clean up with `terraform destroy`. Once you've confirmed it works, set
+`idle_minutes` back to a sensible value (e.g. `45`).
 
 Caveats:
 - Idle is judged by (no sandboxes) + (no SSH sessions) + (1-min load < 0.5). A
