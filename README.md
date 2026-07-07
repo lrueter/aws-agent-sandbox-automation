@@ -243,6 +243,17 @@ Caveats:
   hands-off destroy of the *entire* stack you'd move state to a remote backend
   (S3) and schedule `terraform destroy` in CI — ask if you want that.
 
+**First-time `AccessDenied` on the alarm:** creating a CloudWatch alarm with an
+EC2 action needs the account's service-linked role `AWSServiceRoleForCloudWatchEvents`.
+The console auto-creates it, but the Terraform/API path doesn't, and a scoped
+deploy user may lack `iam:CreateServiceLinkedRole`. Two fixes: (a) create it once,
+account-wide, as an admin — `aws iam create-service-linked-role --aws-service-name
+events.amazonaws.com` — then re-apply; or (b) grant the deploy user the scoped
+`iam:CreateServiceLinkedRole` permission (already in
+`iam/forgevm-terraform-policy.json`) so the first apply creates it. If IAM is
+locked down and neither is possible, set `auto_terminate_idle = false` and use
+an in-instance idle-shutdown instead (ask).
+
 ### Inspect / connect
 
 ```bash
