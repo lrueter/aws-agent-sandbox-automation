@@ -31,6 +31,7 @@ Run:
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import httpx
@@ -47,9 +48,10 @@ SANDBOX_IMAGE = os.environ.get("SANDBOX_IMAGE", "python:3.12-slim")
 
 SYSTEM_PROMPT = """\
 You are a helpful coding assistant. When the user asks you to solve a task,
-respond ONLY with a Python script that prints the answer to stdout.
-Do not include any explanation outside of code comments.
-Wrap the code in ```python ... ``` markers.
+respond ONLY with a single Python script that prints the answer to stdout.
+Wrap the code in ```python ... ``` markers and output nothing before or after
+those markers. Always include the closing ``` marker. Do not include any
+explanation outside of code comments.
 """
 
 # ---------------------------------------------------------------------------
@@ -76,16 +78,23 @@ def ask_ollama(prompt: str, history: list[dict]) -> str:
 
 
 def extract_code(reply: str) -> str | None:
-    """Extract the first ```python ... ``` block from the LLM reply."""
-    marker = "```python"
-    start = reply.find(marker)
-    if start == -1:
-        return None
-    start += len(marker)
-    end = reply.find("```", start)
-    if end == -1:
-        return None
-    return reply[start:end].strip()
+    """Extract a Python code block from the LLM reply.
+
+    Tolerant of things small local models do: <think>...</think> reasoning
+    blocks, ```py / bare ``` fences, and an UNTERMINATED fence (some models
+    forget the closing ```), in which case we take everything to the end.
+    """
+    reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL)
+    for marker in ("```python", "```py", "```"):
+        start = reply.find(marker)
+        if start == -1:
+            continue
+        start += len(marker)
+        end = reply.find("```", start)
+        code = (reply[start:end] if end != -1 else reply[start:]).strip()
+        if code:
+            return code
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +114,9 @@ def main() -> None:
     print(f"(ForgeVM={FORGEVM_URL}  Ollama={OLLAMA_MODEL}  image={SANDBOX_IMAGE})\n")
 
     history: list[dict] = []
+    # Initialized so the retry prompt never references an unset variable when an
+    # attempt fails to yield runnable code. exit_code is None => "no code yet".
+    stdout, stderr, exit_code = "", "", None
 
     with Client(FORGEVM_URL) as client:
         with client.spawn(image=SANDBOX_IMAGE, ttl="10m") as sandbox:
@@ -116,6 +128,13 @@ def main() -> None:
                 # 1. Ask the LLM to generate code.
                 if attempt == 1:
                     prompt = task
+                elif exit_code is None:
+                    # Previous attempt produced no runnable code block.
+                    prompt = (
+                        "You did not return a valid Python code block. Reply with "
+                        "ONLY a Python script wrapped in ```python ... ``` that "
+                        "prints the answer, including the closing ``` marker."
+                    )
                 else:
                     prompt = (
                         f"The previous code had this output:\n"
@@ -130,8 +149,9 @@ def main() -> None:
 
                 code = extract_code(reply)
                 if code is None:
-                    print("LLM did not return a code block. Raw reply:")
+                    print("LLM did not return a usable code block. Raw reply:")
                     print(reply)
+                    exit_code = None  # keep this attempt marked as "no code"
                     continue
 
                 print(f"Generated code:\n{code}\n")
