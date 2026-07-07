@@ -327,6 +327,9 @@ sudo journalctl -u forgevm -n 50       # recent logs
 | Destroy (bill → $0) | `terraform destroy` |
 | SSH in | `eval "$(terraform output -raw ssh_command)"` |
 | Health check | `curl "$(terraform output -raw forgevm_url)/api/v1/sandboxes"` |
+| Instance state (terminated?) | `aws ec2 describe-instances --instance-ids "$(terraform output -raw instance_id)" --query 'Reservations[].Instances[].State.Name' --output text` |
+
+See [Checking whether the instance has terminated](#checking-whether-the-instance-has-terminated) for the idle auto-terminate details.
 
 ---
 
