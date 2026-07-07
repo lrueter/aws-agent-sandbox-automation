@@ -49,6 +49,31 @@ The IAM identity behind those credentials needs permission to manage EC2
 parameter, and — for the CLI path — `ec2:StopInstances`, `ec2:StartInstances`,
 and `ec2:ModifyInstanceCpuOptions`.
 
+### Creating a scoped IAM user
+
+A ready-to-use least-privilege policy is provided at
+[`iam/forgevm-terraform-policy.json`](iam/forgevm-terraform-policy.json). It
+grants only what this project needs and **locks all mutating EC2 actions to
+`us-east-1`** via an `aws:RequestedRegion` condition (change that region in the
+JSON if you deploy elsewhere).
+
+From the AWS console (sign in as an admin, not for day-to-day use):
+
+1. **IAM → Policies → Create policy → JSON**, paste the file's contents, and
+   name it `forgevm-terraform`.
+2. **IAM → Users → Create user** (e.g. `forgevm-deployer`); do **not** grant
+   console access — this is a programmatic-only user. Attach the
+   `forgevm-terraform` policy directly.
+3. **User → Security credentials → Create access key → CLI**. Copy the
+   **secret access key** — it's shown only once.
+4. Put the credentials in your environment (see above) and confirm with
+   `aws sts get-caller-identity`.
+
+If an `apply` ever fails with `UnauthorizedOperation` naming an `ec2:` action
+not in the policy, add just that action to the `ManageEC2InUsEast1` statement.
+Rotate or delete the access key when you're done — long-lived keys are the main
+risk with IAM users.
+
 ---
 
 ## Nested virtualization — the key constraint
@@ -176,6 +201,8 @@ terraform/
   terraform.tfvars.example copy to terraform.tfvars
 scripts/
   verify-kvm.sh            on-host health check
+iam/
+  forgevm-terraform-policy.json   least-privilege IAM policy for the deploy user
 ```
 
 ## Security notes
