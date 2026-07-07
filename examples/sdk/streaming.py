@@ -43,13 +43,16 @@ def main() -> None:
 
             # --- Example 3: Long-running process ------------------------
             print("=== Generating data ===")
+            # Written WITHOUT mode= on purpose: we run it via `sh /tmp/gen.sh`,
+            # which doesn't need the execute bit, and the SDK's write_file mode=
+            # argument hangs (ReadTimeout) against some ForgeVM server versions.
             sandbox.write_file("/tmp/gen.sh", (
                 "#!/bin/sh\n"
                 "for i in $(seq 1 20); do\n"
                 "  echo \"line $i: $(date +%T)\"\n"
                 "  sleep 0.1\n"
                 "done\n"
-            ), mode="0755")
+            ))
 
             for chunk in sandbox.exec_stream("sh /tmp/gen.sh"):
                 sys.stdout.write(chunk.data)
