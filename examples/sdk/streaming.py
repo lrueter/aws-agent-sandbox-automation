@@ -41,20 +41,18 @@ def main() -> None:
                 sys.stdout.write(f"{prefix} {chunk.data}")
             print()
 
-            # --- Example 3: Long-running process ------------------------
+            # --- Example 3: Stream a longer-running process ------------
+            # NOTE: this originally wrote a script with write_file() and then
+            # ran it. Calling write_file() immediately AFTER an exec_stream()
+            # hangs (client ReadTimeout) against this ForgeVM server — the
+            # streaming response leaves the pooled HTTP connection unusable for
+            # the next plain request. write_file() on its own is fine (see
+            # basic.py). Inlining the loop into a single exec_stream() avoids
+            # the issue and shows the same thing: real-time output from a
+            # longer command.
             print("=== Generating data ===")
-            # Written WITHOUT mode= on purpose: we run it via `sh /tmp/gen.sh`,
-            # which doesn't need the execute bit, and the SDK's write_file mode=
-            # argument hangs (ReadTimeout) against some ForgeVM server versions.
-            sandbox.write_file("/tmp/gen.sh", (
-                "#!/bin/sh\n"
-                "for i in $(seq 1 20); do\n"
-                "  echo \"line $i: $(date +%T)\"\n"
-                "  sleep 0.1\n"
-                "done\n"
-            ))
-
-            for chunk in sandbox.exec_stream("sh /tmp/gen.sh"):
+            gen_cmd = "for i in $(seq 1 20); do echo \"line $i: $(date +%T)\"; sleep 0.1; done"
+            for chunk in sandbox.exec_stream(gen_cmd):
                 sys.stdout.write(chunk.data)
             print()
 
