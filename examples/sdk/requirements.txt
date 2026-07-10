@@ -1,0 +1,4 @@
+# ForgeVM Python SDK (client-side; runs on your machine, not in the sandbox).
+# It pulls in httpx, which ollama_agent.py also uses directly.
+# With uv you don't need this file: `uv run --with forgevm python <script>.py`.
+forgevm

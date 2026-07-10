@@ -1,0 +1,4 @@
+# Third-party libraries to bake into the sandbox image. Pin versions for
+# reproducibility. Add your own here.
+pandas
+requests

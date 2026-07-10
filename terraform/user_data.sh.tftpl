@@ -1,0 +1,205 @@
+#!/bin/bash
+# ForgeVM bootstrap (Amazon Linux 2023, x86_64).
+# Rendered by Terraform's templatefile(); ${forgevm_version} and ${xfs_size_gb}
+# are template variables. Everything else is plain bash.
+set -uo pipefail
+exec > >(tee -a /var/log/forgevm-bootstrap.log) 2>&1
+echo "=== ForgeVM bootstrap started at $(date -u) ==="
+
+FORGEVM_DATA_DIR="/var/lib/forgevm"
+XFS_IMG="/opt/forgevm-xfs.img"
+XFS_SIZE_GB="${xfs_size_gb}"
+FORGEVM_VERSION="${forgevm_version}"
+
+# ---------------------------------------------------------------------------
+# 1. Virtualization / KVM sanity check (advisory — never fails the bootstrap)
+# ---------------------------------------------------------------------------
+echo "--- Checking virtualization support ---"
+if grep -Eq 'vmx|svm' /proc/cpuinfo; then
+  echo "OK: CPU virtualization extensions (vmx/svm) present."
+else
+  echo "WARN: no vmx/svm in /proc/cpuinfo — nested virtualization may not be enabled yet."
+fi
+if [ -e /dev/kvm ]; then
+  echo "OK: /dev/kvm present."
+else
+  echo "WARN: /dev/kvm not found. With nested_virtualization_method=cli this is expected on the"
+  echo "      first boot; /dev/kvm appears after the stop/modify/start cycle and the forgevm"
+  echo "      service (enabled below) picks it up on the next boot."
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Base packages
+# ---------------------------------------------------------------------------
+echo "--- Installing packages (docker, xfsprogs, tar) ---"
+# Do NOT add "curl" to this list: Amazon Linux 2023 ships curl-minimal, and
+# pulling in the full "curl" package conflicts with it, which fails the ENTIRE
+# dnf transaction (taking docker + xfsprogs down with it). curl-minimal already
+# provides the `curl` command used later in this script. The retry loop only
+# helps with genuine transient lock/mirror hiccups — it cannot fix a package
+# conflict, so the fix is to not request the conflicting package.
+for attempt in 1 2 3 4 5; do
+  dnf -y install docker xfsprogs tar && break
+  echo "WARN: package install attempt $attempt failed; retrying in 10s..."
+  sleep 10
+done
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: Docker did not install. ForgeVM will still start, but sandbox image"
+  echo "       builds need Docker — install it and run: systemctl restart forgevm"
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Docker
+# ---------------------------------------------------------------------------
+echo "--- Enabling Docker ---"
+systemctl enable --now docker || echo "WARN: could not start docker.service yet"
+usermod -aG docker ec2-user || true
+
+# ---------------------------------------------------------------------------
+# 3b. ext4 kernel module — ForgeVM builds rootfs images as ext4 and loop-mounts
+# them inside a builder container. AL2023's root fs is XFS, so ext4 isn't loaded
+# by default; without it the build fails with
+# "mount ... failed: Invalid argument". Load it now and on every boot.
+# ---------------------------------------------------------------------------
+echo "--- Loading ext4 kernel module ---"
+modprobe ext4 || echo "WARN: could not load ext4 module"
+echo ext4 > /etc/modules-load.d/forgevm.conf
+
+# ---------------------------------------------------------------------------
+# 4. XFS reflink loopback volume at /var/lib/forgevm (fast snapshot restore)
+# ---------------------------------------------------------------------------
+echo "--- Setting up XFS reflink volume ($${XFS_SIZE_GB} GiB) at $FORGEVM_DATA_DIR ---"
+mkdir -p "$FORGEVM_DATA_DIR"
+if ! mountpoint -q "$FORGEVM_DATA_DIR"; then
+  if [ ! -f "$XFS_IMG" ]; then
+    fallocate -l "$${XFS_SIZE_GB}G" "$XFS_IMG"
+    mkfs.xfs -m reflink=1 "$XFS_IMG"
+  fi
+  if ! grep -q "$XFS_IMG" /etc/fstab; then
+    echo "$XFS_IMG $FORGEVM_DATA_DIR xfs loop,defaults 0 0" >> /etc/fstab
+  fi
+  mount "$FORGEVM_DATA_DIR" || mount -o loop "$XFS_IMG" "$FORGEVM_DATA_DIR"
+  echo "OK: XFS reflink volume mounted ($(findmnt -no FSTYPE "$FORGEVM_DATA_DIR"))."
+else
+  echo "Data dir is already a mountpoint; leaving it as-is."
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Install ForgeVM (prebuilt binary — no Go toolchain needed)
+#    Downloads the forgevm binary to /usr/local/bin plus the Firecracker
+#    binary and guest kernel (vmlinux.bin) into /var/lib/forgevm.
+# ---------------------------------------------------------------------------
+echo "--- Installing ForgeVM ---"
+export FORGEVM_INSTALL_DIR="/usr/local/bin"
+if [ -n "$FORGEVM_VERSION" ]; then
+  export FORGEVM_VERSION
+fi
+curl -fsSL https://raw.githubusercontent.com/DohaerisAI/forgevm/main/scripts/install.sh | bash
+
+# ---------------------------------------------------------------------------
+# 6. systemd service
+# ---------------------------------------------------------------------------
+echo "--- Creating forgevm.service ---"
+cat > /etc/systemd/system/forgevm.service <<'UNIT'
+[Unit]
+Description=ForgeVM code-execution sandbox
+After=network-online.target docker.service
+# Soft deps: ForgeVM only needs Docker to build sandbox images on demand, so a
+# missing/late docker.service must not prevent the server from starting.
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+Environment=FORGEVM_DATA_DIR=/var/lib/forgevm
+# Bind on all interfaces so the API is reachable remotely (the security group
+# restricts access to your IP). If ForgeVM ignores these vars and only listens
+# on localhost, see the "API not reachable" note in the README.
+Environment=FORGEVM_HOST=0.0.0.0
+Environment=FORGEVM_PORT=7423
+# Prefer the Firecracker microVM provider (requires x86_64 + /dev/kvm).
+Environment=FORGEVM_PROVIDERS_DEFAULT=firecracker
+ExecStart=/usr/local/bin/forgevm serve
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now forgevm.service
+
+%{ if auto_terminate_idle ~}
+# ---------------------------------------------------------------------------
+# 7. Idle auto-terminate (cost guard) — no CloudWatch, no IAM.
+# A systemd timer runs the check every 5 min. When the box has had no running
+# ForgeVM sandboxes, no logged-in SSH users, and low CPU load for ${idle_minutes}
+# minutes, it runs `shutdown -h`, which TERMINATES the instance because
+# instance_initiated_shutdown_behavior = "terminate".
+# ---------------------------------------------------------------------------
+echo "--- Installing idle auto-terminate (~${idle_minutes}m) ---"
+cat > /usr/local/bin/forgevm-idle-check.sh <<'IDLE'
+#!/bin/bash
+set -uo pipefail
+IDLE_MINUTES=${idle_minutes}
+INTERVAL_MIN=5
+STATE=/run/forgevm-idle-count   # tmpfs: resets on reboot
+THRESHOLD=$(( (IDLE_MINUTES + INTERVAL_MIN - 1) / INTERVAL_MIN ))
+[ "$THRESHOLD" -lt 1 ] && THRESHOLD=1
+
+busy=0
+# Any running ForgeVM sandboxes?
+if curl -fsS --max-time 5 http://localhost:7423/api/v1/sandboxes 2>/dev/null | grep -q '"id"'; then
+  busy=1
+fi
+# Any logged-in SSH users?
+[ "$(who | wc -l)" -gt 0 ] && busy=1
+# CPU busy? 1-minute load average >= 0.5 (awk prints load x100).
+load=$(awk '{printf "%d", $1*100}' /proc/loadavg)
+[ "$load" -ge 50 ] && busy=1
+
+if [ "$busy" -eq 1 ]; then
+  echo 0 > "$STATE"
+  exit 0
+fi
+
+n=$(cat "$STATE" 2>/dev/null || echo 0)
+n=$((n + 1))
+echo "$n" > "$STATE"
+logger -t forgevm-idle "idle check $n of $THRESHOLD"
+
+if [ "$n" -ge "$THRESHOLD" ]; then
+  logger -t forgevm-idle "idle ~$IDLE_MINUTES min - terminating instance"
+  /sbin/shutdown -h now "forgevm idle auto-terminate"
+fi
+IDLE
+chmod +x /usr/local/bin/forgevm-idle-check.sh
+
+cat > /etc/systemd/system/forgevm-idle.service <<'UNIT'
+[Unit]
+Description=ForgeVM idle auto-terminate check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/forgevm-idle-check.sh
+UNIT
+
+cat > /etc/systemd/system/forgevm-idle.timer <<'UNIT'
+[Unit]
+Description=Run the ForgeVM idle check every 5 minutes
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now forgevm-idle.timer
+%{ endif ~}
+
+echo "=== ForgeVM bootstrap finished at $(date -u) ==="

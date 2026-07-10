@@ -1,0 +1,45 @@
+# Copy to terraform.tfvars and adjust. terraform.tfvars is gitignored.
+
+region        = "us-east-1"
+instance_type = "m7i-flex.large" # 2 vCPU / 8 GiB, ~$70/mo. Cheaper: "c7i-flex.large".
+
+# Access is locked to a single CIDR. Leave empty to auto-detect your current
+# public IP as a /32, or pin it explicitly:
+# allowed_cidr = "203.0.113.7/32"
+
+# Networking: leave empty to use the default VPC. If your account has NO default
+# VPC (common on corporate accounts), set a public subnet id. Find one with:
+#   aws ec2 describe-subnets \
+#     --query 'Subnets[].{ID:SubnetId,VPC:VpcId,AZ:AvailabilityZone,Public:MapPublicIpOnLaunch}' \
+#     --output table
+# subnet_id = "subnet-0abc123..."
+
+# SSH key: either let Terraform generate one...
+# generate_ssh_key   = true
+# generated_key_path = "./forgevm-ssh-key.pem"
+# ...or point at an existing public key (used when generate_ssh_key = false):
+# public_key_path = "~/.ssh/id_rsa.pub"
+# key_name        = "forgevm-sandbox"
+
+# Storage:
+# root_volume_size    = 40 # GiB, gp3
+# forgevm_xfs_size_gb = 8  # GiB, XFS reflink loopback for fast snapshots
+
+# ForgeVM version ("" = latest release):
+# forgevm_version = ""
+
+# Idle cost guard: an in-instance systemd timer terminates the box after it's
+# been idle (no sandboxes, no SSH, low load) so a forgotten box stops billing on
+# its own (kills instance + root EBS). No CloudWatch/IAM needed. On by default.
+# auto_terminate_idle = true
+# idle_minutes        = 45    # sustained-idle time before terminate
+
+# Elastic IP: off by default so an auto-terminate leaves nothing billable.
+# Turn on for a stable address (recommended with nested_virtualization_method="cli").
+# use_elastic_ip = false
+
+# Nested virtualization enablement:
+#   "provider" — native aws_instance cpu_options (needs a recent AWS provider)
+#   "cli"      — post-launch `aws ec2 modify-instance-cpu-options` (any provider,
+#                requires the AWS CLI >= 2.33.21 locally)
+# nested_virtualization_method = "provider"

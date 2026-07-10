@@ -1,0 +1,24 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+
+# Local variable files (may contain IPs / key paths) — keep the example
+*.tfvars
+!*.tfvars.example
+
+# SSH keys
+*.pem
+
+# Python
+__pycache__/
+*.pyc
